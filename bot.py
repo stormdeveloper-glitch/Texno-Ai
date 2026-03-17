@@ -253,7 +253,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     caption=f"💳 <b>Yangi to'lov cheki!</b>\n\n"
                             f"👤 Foydalanuvchi: {user.full_name}\n"
                             f"🆔 ID: <code>{user.id}</code>\n"
-                            f"👤 Username: @{user.username or 'yo\'q'}\n\n"
+                            f"👤 Username: @{user.username or 'yoq'}\n\n"
                             f"⬇️ Tasdiqlash yoki rad etish:",
                     parse_mode="HTML",
                     reply_markup=keyboard
