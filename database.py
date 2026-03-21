@@ -26,16 +26,21 @@ class Database:
                     username         TEXT,
                     full_name        TEXT,
                     is_active        INTEGER DEFAULT 0,
+                    is_vip           INTEGER DEFAULT 0,
                     subscription_end TEXT,
+                    balance          INTEGER DEFAULT 0,
+                    referral_code    TEXT UNIQUE,
+                    referred_by      INTEGER,
                     created_at       TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS payments (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id    INTEGER NOT NULL,
-                    file_id    TEXT NOT NULL,
-                    status     TEXT DEFAULT 'pending',
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id        INTEGER NOT NULL,
+                    file_id        TEXT NOT NULL,
+                    payment_type   TEXT DEFAULT 'normal',
+                    status         TEXT DEFAULT 'pending',
+                    created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 );
 
@@ -47,7 +52,6 @@ class Database:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
-                -- Suhbat tarixi (volume da saqlanadi)
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id    INTEGER NOT NULL,
@@ -56,7 +60,6 @@ class Database:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
-                -- Kunlik xabar hisob-kitobi
                 CREATE TABLE IF NOT EXISTS daily_usage (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id       INTEGER NOT NULL,
@@ -65,7 +68,6 @@ class Database:
                     UNIQUE(user_id, usage_date)
                 );
 
-                -- Majburiy kanallar (admin panel orqali boshqariladi)
                 CREATE TABLE IF NOT EXISTS required_channels (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
                     channel_id TEXT UNIQUE NOT NULL,
@@ -74,26 +76,56 @@ class Database:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
-                -- Bot sozlamalari (kalit-qiymat)
                 CREATE TABLE IF NOT EXISTS settings (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS referral_history (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    referrer_id  INTEGER NOT NULL,
+                    referred_id  INTEGER NOT NULL,
+                    bonus_amount INTEGER DEFAULT 0,
+                    created_at   TEXT DEFAULT CURRENT_TIMESTAMP
+                );
             """)
+            # Migration: eski DB larga yangi ustunlar qo'shish
+            for col, defval in [
+                ("is_vip",        "INTEGER DEFAULT 0"),
+                ("balance",       "INTEGER DEFAULT 0"),
+                ("referral_code", "TEXT"),
+                ("referred_by",   "INTEGER"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {col} {defval}")
+                except Exception:
+                    pass
+            # payments ga payment_type ustuni qo'shish
+            try:
+                conn.execute("ALTER TABLE payments ADD COLUMN payment_type TEXT DEFAULT 'normal'")
+            except Exception:
+                pass
         logger.info("✅ Database tayyor!")
 
     # ─── FOYDALANUVCHILAR ─────────────────────────────────────────────────────
 
-    def add_user(self, user_id: int, username: str, full_name: str):
+    def add_user(self, user_id: int, username: str, full_name: str, referred_by: int = None):
+        import random, string
+        ref_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO users (user_id, username, full_name) VALUES (?,?,?)",
-                (user_id, username or "", full_name or "")
+                """INSERT OR IGNORE INTO users (user_id, username, full_name, referral_code, referred_by)
+                   VALUES (?,?,?,?,?)""",
+                (user_id, username or "", full_name or "", ref_code, referred_by)
             )
             conn.execute(
                 "UPDATE users SET username=?, full_name=? WHERE user_id=?",
                 (username or "", full_name or "", user_id)
             )
+            # referral_code bo'sh bo'lsa yangi kod berish
+            row = conn.execute("SELECT referral_code FROM users WHERE user_id=?", (user_id,)).fetchone()
+            if not row or not row["referral_code"]:
+                conn.execute("UPDATE users SET referral_code=? WHERE user_id=?", (ref_code, user_id))
 
     def is_active_subscriber(self, user_id: int) -> bool:
         with self._conn() as conn:
@@ -110,24 +142,68 @@ class Database:
                     return False
             return True
 
-    def get_subscription_info(self, user_id: int) -> dict:
+    def is_vip(self, user_id: int) -> bool:
+        """
+        VIP faqat is_active=1 bo'lsa va muddati tugamagan bo'lsa True.
+        BUG FIX: Ilgari obuna muddati tekshirilmay, is_vip=1 bo'lsa doim True qaytardi.
+        """
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT is_active, subscription_end FROM users WHERE user_id=?",
+                "SELECT is_vip, is_active, subscription_end FROM users WHERE user_id=?",
                 (user_id,)
             ).fetchone()
-            if not row:
-                return {"is_active": False, "days_left": 0, "end_date": None}
-            days_left = 0
-            end_date = None
+            if not row or not row["is_vip"] or not row["is_active"]:
+                return False
             if row["subscription_end"]:
-                end_date = datetime.fromisoformat(row["subscription_end"])
-                days_left = max(0, (end_date - datetime.now()).days)
-            active = bool(row["is_active"]) and days_left > 0
-            return {"is_active": active, "days_left": days_left, "end_date": end_date}
+                end = datetime.fromisoformat(row["subscription_end"])
+                if datetime.now() > end:
+                    # Obuna tugagan - VIP ham emas
+                    conn.execute("UPDATE users SET is_active=0 WHERE user_id=?", (user_id,))
+                    return False
+            return True
+
+    def set_vip(self, user_id: int, status: bool):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE users SET is_vip=? WHERE user_id=?",
+                (1 if status else 0, user_id)
+            )
+
+    def activate_vip_subscription(self, user_id: int) -> str:
+        """
+        VIP obunani faollashtiradi — is_vip=1 va muddatni uzaytiradi.
+        BUG FIX: Ilgari VIP ni faqat /setvip orqali berish mumkin edi,
+        to'lov tasdiqlansa oddiy obuna faollashtirilardi.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT subscription_end, is_active FROM users WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            now = datetime.now()
+            if row and row["is_active"] and row["subscription_end"]:
+                current_end = datetime.fromisoformat(row["subscription_end"])
+                base = current_end if current_end > now else now
+            else:
+                base = now
+            end_date = (base + timedelta(days=Config.SUBSCRIPTION_DAYS)).isoformat()
+            conn.execute(
+                "UPDATE users SET is_active=1, is_vip=1, subscription_end=? WHERE user_id=?",
+                (end_date, user_id)
+            )
+            return end_date
+
+    def get_user_limit(self, user_id: int) -> int:
+        """
+        Foydalanuvchi limitini qaytaradi.
+        BUG FIX: is_vip() endi obuna muddatini ham tekshiradi.
+        """
+        if self.is_vip(user_id):
+            return int(self.get_setting("vip_limit", str(Config.DAILY_LIMIT_VIP)))
+        return int(self.get_setting("normal_limit", str(Config.DAILY_LIMIT_NORMAL)))
 
     def activate_subscription(self, user_id: int) -> str:
-        """Obunani faollashtiradi yoki muddatini uzaytiradi."""
+        """Oddiy obunani faollashtiradi (is_vip o'zgarmaydi)."""
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT subscription_end, is_active FROM users WHERE user_id=?",
@@ -148,10 +224,36 @@ class Database:
 
     def deactivate_subscription(self, user_id: int):
         with self._conn() as conn:
-            conn.execute("UPDATE users SET is_active=0 WHERE user_id=?", (user_id,))
+            conn.execute(
+                "UPDATE users SET is_active=0, is_vip=0 WHERE user_id=?",
+                (user_id,)
+            )
+
+    def get_subscription_info(self, user_id: int) -> dict:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT is_active, is_vip, subscription_end, balance FROM users WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            if not row:
+                return {"is_active": False, "is_vip": False, "days_left": 0, "end_date": None, "balance": 0}
+            days_left = 0
+            end_date = None
+            if row["subscription_end"]:
+                end_date = datetime.fromisoformat(row["subscription_end"])
+                days_left = max(0, (end_date - datetime.now()).days)
+            active = bool(row["is_active"]) and days_left > 0
+            # VIP faqat aktiv obuna bilan
+            is_vip_active = bool(row["is_vip"]) and active
+            return {
+                "is_active": active,
+                "is_vip": is_vip_active,
+                "days_left": days_left,
+                "end_date": end_date,
+                "balance": row["balance"] or 0
+            }
 
     def get_expiring_users(self) -> list:
-        """Obunasi {EXPIRY_WARN_DAYS} kun ichida tugaydigan foydalanuvchilar."""
         warn = (datetime.now() + timedelta(days=Config.EXPIRY_WARN_DAYS)).isoformat()
         now  = datetime.now().isoformat()
         with self._conn() as conn:
@@ -167,15 +269,13 @@ class Database:
     def get_all_users(self) -> list:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT user_id, username, full_name, is_active, subscription_end FROM users ORDER BY id DESC"
+                "SELECT user_id, username, full_name, is_active, is_vip, subscription_end, balance FROM users ORDER BY id DESC"
             ).fetchall()
             return [dict(r) for r in rows]
 
     def get_active_subscribers(self) -> list:
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT user_id FROM users WHERE is_active=1"
-            ).fetchall()
+            rows = conn.execute("SELECT user_id FROM users WHERE is_active=1").fetchall()
             return [r["user_id"] for r in rows]
 
     def get_all_user_ids(self) -> list:
@@ -185,13 +285,25 @@ class Database:
 
     # ─── TO'LOVLAR ────────────────────────────────────────────────────────────
 
-    def add_payment(self, user_id: int, file_id: str) -> int:
+    def add_payment(self, user_id: int, file_id: str, payment_type: str = "normal") -> int:
+        """
+        BUG FIX: payment_type parametri qo'shildi.
+        'normal' = oddiy obuna, 'vip' = VIP obuna.
+        """
         with self._conn() as conn:
             cur = conn.execute(
-                "INSERT INTO payments (user_id, file_id) VALUES (?,?)",
-                (user_id, file_id)
+                "INSERT INTO payments (user_id, file_id, payment_type) VALUES (?,?,?)",
+                (user_id, file_id, payment_type)
             )
             return cur.lastrowid
+
+    def get_payment_type(self, payment_id: int) -> str:
+        """To'lov turini qaytaradi (normal yoki vip)."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payment_type FROM payments WHERE id=?", (payment_id,)
+            ).fetchone()
+            return row["payment_type"] if row else "normal"
 
     def update_payment_status(self, payment_id: int, status: str):
         with self._conn() as conn:
@@ -203,13 +315,13 @@ class Database:
     def get_pending_payments(self) -> list:
         with self._conn() as conn:
             rows = conn.execute(
-                """SELECT p.id, p.user_id, p.file_id, p.created_at, u.full_name, u.username
+                """SELECT p.id, p.user_id, p.file_id, p.payment_type, p.created_at, u.full_name, u.username
                    FROM payments p JOIN users u ON p.user_id=u.user_id
                    WHERE p.status='pending' ORDER BY p.created_at DESC"""
             ).fetchall()
             return [dict(r) for r in rows]
 
-    # ─── SUHBAT TARIXI (volume da saqlanadi) ──────────────────────────────────
+    # ─── SUHBAT TARIXI ────────────────────────────────────────────────────────
 
     def get_history(self, user_id: int, limit: int = 20) -> list:
         with self._conn() as conn:
@@ -251,7 +363,62 @@ class Database:
                 (user_id, today)
             )
 
-    # ─── MAJBURIY KANALLAR (admin panel) ─────────────────────────────────────
+    # ─── REFERRAL ─────────────────────────────────────────────────────────────
+
+    def get_referral_code(self, user_id: int) -> str:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT referral_code FROM users WHERE user_id=?", (user_id,)
+            ).fetchone()
+            return row["referral_code"] if row else None
+
+    def get_user_by_referral_code(self, code: str):
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT user_id, full_name FROM users WHERE referral_code=?", (code,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def process_referral(self, referrer_id: int, referred_id: int) -> bool:
+        with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT id FROM referral_history WHERE referred_id=?", (referred_id,)
+            ).fetchone()
+            if existing:
+                return False
+            bonus = Config.REFERRAL_BONUS_UZS
+            conn.execute(
+                "INSERT INTO referral_history (referrer_id, referred_id, bonus_amount) VALUES (?,?,?)",
+                (referrer_id, referred_id, bonus)
+            )
+            conn.execute(
+                "UPDATE users SET balance = balance + ? WHERE user_id=?",
+                (bonus, referrer_id)
+            )
+            return True
+
+    def get_referral_stats(self, user_id: int) -> dict:
+        with self._conn() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM referral_history WHERE referrer_id=?", (user_id,)
+            ).fetchone()["cnt"]
+            total_bonus = conn.execute(
+                "SELECT COALESCE(SUM(bonus_amount), 0) as total FROM referral_history WHERE referrer_id=?",
+                (user_id,)
+            ).fetchone()["total"]
+            balance = conn.execute(
+                "SELECT COALESCE(balance, 0) as bal FROM users WHERE user_id=?", (user_id,)
+            ).fetchone()["bal"]
+            return {"count": count, "total_bonus": total_bonus, "balance": balance}
+
+    def get_balance(self, user_id: int) -> int:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(balance, 0) as bal FROM users WHERE user_id=?", (user_id,)
+            ).fetchone()
+            return row["bal"] if row else 0
+
+    # ─── MAJBURIY KANALLAR ────────────────────────────────────────────────────
 
     def get_channels(self) -> list:
         with self._conn() as conn:
@@ -275,9 +442,7 @@ class Database:
     def remove_channel(self, channel_id: str) -> bool:
         try:
             with self._conn() as conn:
-                conn.execute(
-                    "DELETE FROM required_channels WHERE channel_id=?", (channel_id,)
-                )
+                conn.execute("DELETE FROM required_channels WHERE channel_id=?", (channel_id,))
             return True
         except Exception as e:
             logger.error(f"remove_channel error: {e}")
@@ -297,6 +462,14 @@ class Database:
                 (key, value)
             )
 
+    def clear_pending_check(self, user_id: int):
+        """
+        BUG FIX: waiting_check ni DB dan to'liq o'chiradi (0 qilmaydi, o'chiradi).
+        Eski yondashuv '0' qiymati bilan yozgan va DB da chiqindi qolgan.
+        """
+        with self._conn() as conn:
+            conn.execute("DELETE FROM settings WHERE key=?", (f"waiting_check_{user_id}",))
+
     # ─── XABARLAR LOGI ────────────────────────────────────────────────────────
 
     def log_message(self, user_id: int, user_text: str, bot_reply: str):
@@ -314,36 +487,34 @@ class Database:
             return {
                 "total_users":      conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
                 "active_subs":      conn.execute("SELECT COUNT(*) FROM users WHERE is_active=1").fetchone()[0],
+                "vip_users":        conn.execute("SELECT COUNT(*) FROM users WHERE is_vip=1 AND is_active=1").fetchone()[0],
                 "pending":          conn.execute("SELECT COUNT(*) FROM payments WHERE status='pending'").fetchone()[0],
+                "pending_vip":      conn.execute("SELECT COUNT(*) FROM payments WHERE status='pending' AND payment_type='vip'").fetchone()[0],
                 "total_messages":   conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                 "approved":         conn.execute("SELECT COUNT(*) FROM payments WHERE status='approved'").fetchone()[0],
                 "today_messages":   conn.execute(
                     "SELECT COALESCE(SUM(message_count),0) FROM daily_usage WHERE usage_date=?", (today,)
                 ).fetchone()[0],
                 "channels":         conn.execute("SELECT COUNT(*) FROM required_channels").fetchone()[0],
+                "total_referrals":  conn.execute("SELECT COUNT(*) FROM referral_history").fetchone()[0],
+                "total_bonuses":    conn.execute("SELECT COALESCE(SUM(bonus_amount),0) FROM referral_history").fetchone()[0],
             }
 
-    # ─── OYLIK TOZALASH (Railway volume) ─────────────────────────────────────
+    # ─── OYLIK TOZALASH ───────────────────────────────────────────────────────
 
     def monthly_cleanup(self):
-        """
-        Har oy boshida chaqiriladi.
-        - Muddati o'tgan chat tarixi (30 kundan eski) o'chiriladi.
-        - Eski kunlik statistika (60 kundan eski) o'chiriladi.
-        - Muddati tugagan obunalar o'chiriladi.
-        Volume da baza saqlanadi, faqat ichidagi eski ma'lumotlar tozalanadi.
-        """
         cutoff_history = (datetime.now() - timedelta(days=30)).isoformat()
         cutoff_daily   = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
         cutoff_msgs    = (datetime.now() - timedelta(days=90)).isoformat()
-
         with self._conn() as conn:
             conn.execute("DELETE FROM chat_history WHERE created_at < ?", (cutoff_history,))
             conn.execute("DELETE FROM daily_usage WHERE usage_date < ?", (cutoff_daily,))
             conn.execute("DELETE FROM messages WHERE created_at < ?", (cutoff_msgs,))
             conn.execute(
-                "UPDATE users SET is_active=0 WHERE is_active=1 AND subscription_end < ?",
+                "UPDATE users SET is_active=0, is_vip=0 WHERE is_active=1 AND subscription_end < ?",
                 (datetime.now().isoformat(),)
             )
+            # BUG FIX: waiting_check chiqindilari ham tozalanadi
+            conn.execute("DELETE FROM settings WHERE key LIKE 'waiting_check_%'")
             conn.execute("VACUUM")
         logger.info("✅ Oylik tozalash bajarildi!")
