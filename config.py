@@ -24,6 +24,9 @@ class Config:
     DAILY_LIMIT_VIP    = int(os.getenv("DAILY_LIMIT_VIP", "50"))
     DAILY_MESSAGE_LIMIT = DAILY_LIMIT_NORMAL
 
+    # ── Trial (sinov) — obunasiz userlarga bepul xabarlar ────────────────────
+    TRIAL_LIMIT = int(os.getenv("TRIAL_LIMIT", "5"))
+
     REFERRAL_BONUS_UZS = int(os.getenv("REFERRAL_BONUS_UZS", "200"))
 
     # ── VIP admin — faqat shu admin VIP to'lovlarini ko'radi va tasdiqlaydi ──

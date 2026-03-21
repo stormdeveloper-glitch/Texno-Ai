@@ -149,10 +149,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     referred_by = None
     if context.args:
-        ref_code = context.args[0]
-        referrer = db.get_user_by_referral_code(ref_code)
-        if referrer and referrer["user_id"] != user.id:
-            referred_by = referrer["user_id"]
+        arg = context.args[0].strip()
+        # Referral: foydalanuvchi ID si (raqam) yoki eski kod
+        if arg.isdigit():
+            ref_uid = int(arg)
+            if ref_uid != user.id:
+                referred_by = ref_uid
+        else:
+            # Eski format (kod) — orqaga muvofiqligi uchun
+            referrer = db.get_user_by_referral_code(arg)
+            if referrer and referrer["user_id"] != user.id:
+                referred_by = referrer["user_id"]
 
     db.add_user(user.id, user.username, user.full_name, referred_by=referred_by)
 
@@ -204,18 +211,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard(user.id)
         )
     else:
-        my_code = db.get_referral_code(user.id)
         bot_username = (await context.bot.get_me()).username
+        trial_used = db.get_trial_count(user.id)
+        remaining  = Config.TRIAL_LIMIT - trial_used
         await update.message.reply_text(
             f"👋 Assalomu alaykum, <b>{user.first_name}</b>!\n\n"
             f"🤖 Men <b>Texno Ai</b> — AI dasturlash o'qituvchisi!\n\n"
+            f"🎁 <b>{remaining} ta bepul sinov so'rov</b> berildi!\n"
+            f"Savolingizni yuboring — sinab ko'ring!\n\n"
             f"💰 <b>Tariflar:</b>\n"
-            f"⭐ Oddiy — {Config.SUBSCRIPTION_PRICE_UZS:,} so'm/oy ({Config.DAILY_LIMIT_NORMAL} ta xabar/kun)\n"
-            f"👑 VIP — {Config.VIP_PRICE_UZS:,} so'm/oy ({Config.DAILY_LIMIT_VIP} ta xabar/kun)\n\n"
-            f"🎁 Do'st taklif qiling — har biri uchun <b>{Config.REFERRAL_BONUS_UZS:,} so'm</b> bonus!\n"
-            f"🔗 <code>https://t.me/{bot_username}?start={my_code}</code>",
+            f"⭐ Oddiy — {Config.SUBSCRIPTION_PRICE_UZS:,} so'm/oy ({Config.DAILY_LIMIT_NORMAL} ta/kun)\n"
+            f"👑 VIP — {Config.VIP_PRICE_UZS:,} so'm/oy ({Config.DAILY_LIMIT_VIP} ta/kun)\n\n"
+            f"🎁 Do'st taklif qiling — har biri uchun <b>{Config.REFERRAL_BONUS_UZS:,} so'm</b>!\n"
+            f"🔗 <code>https://t.me/{bot_username}?start={user.id}</code>",
             parse_mode=ParseMode.HTML,
-            reply_markup=sub_keyboard()
+            reply_markup=main_keyboard(user.id)
         )
 
 # ─── /status ──────────────────────────────────────────────────────────────────
@@ -279,7 +289,6 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username, user.full_name)  # foydalanuvchi yo'q bo'lsa qo'shamiz
     stats = db.get_referral_stats(user.id)
-    ref_code = db.get_referral_code(user.id)
     bot_username = (await context.bot.get_me()).username
     await update.message.reply_text(
         f"💰 <b>Hisobim</b>\n\n"
@@ -288,7 +297,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Taklif qilinganlar: <b>{stats['count']} kishi</b>\n"
         f"• Jami bonus: <b>{stats['total_bonus']:,} so'm</b>\n\n"
         f"🔗 Havolangiz:\n"
-        f"<code>https://t.me/{bot_username}?start={ref_code}</code>\n\n"
+        f"<code>https://t.me/{bot_username}?start={user.id}</code>\n\n"
         f"💡 Har bir do'st uchun <b>{Config.REFERRAL_BONUS_UZS:,} so'm</b>!",
         parse_mode=ParseMode.HTML
     )
@@ -298,7 +307,6 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username, user.full_name)  # foydalanuvchi yo'q bo'lsa qo'shamiz
-    ref_code = db.get_referral_code(user.id)
     bot_username = (await context.bot.get_me()).username
     stats = db.get_referral_stats(user.id)
     await update.message.reply_text(
@@ -309,7 +317,7 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Bonus: <b>{stats['total_bonus']:,} so'm</b>\n"
         f"• Balans: <b>{stats['balance']:,} so'm</b>\n\n"
         f"🔗 <b>Havolangiz:</b>\n"
-        f"<code>https://t.me/{bot_username}?start={ref_code}</code>\n\n"
+        f"<code>https://t.me/{bot_username}?start={user.id}</code>\n\n"
         f"👆 Nusxalab do'stlaringizga yuboring!",
         parse_mode=ParseMode.HTML
     )
@@ -335,7 +343,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if db.is_active_subscriber(user.id):
                 await query.edit_message_text("✅ Botdan foydalanishingiz mumkin!\n\nSavolingizni yozing 👇")
             else:
-                await query.edit_message_text("✅ Kanallarga obuna bo'ldingiz!\n\nObuna sotib oling:", reply_markup=sub_keyboard())
+                trial_used = db.get_trial_count(user.id)
+                remaining  = Config.TRIAL_LIMIT - trial_used
+                if remaining > 0:
+                    await query.edit_message_text(
+                        f"✅ Kanallarga obuna bo'ldingiz!\n\n"
+                        f"🎁 Sizga <b>{remaining} ta bepul sinov</b> so'rov berildi!\n"
+                        f"Savolingizni yuboring 👇",
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    await query.edit_message_text(
+                        f"✅ Kanallarga obuna bo'ldingiz!\n\n"
+                        f"🔒 Bepul sinov tugagan. Davom etish uchun obuna oling:",
+                        reply_markup=sub_keyboard()
+                    )
         return
 
     # ─── BUG FIX: send_check_normal va send_check_vip alohida ───
@@ -416,6 +438,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if payment_id:
             db.update_payment_status(payment_id, "approved")
+        db.reset_trial(target_id)  # Trial hisobini tozalash
 
         end_str = datetime.fromisoformat(end_date).strftime("%d.%m.%Y") if end_date else "—"
         ts = now_tashkent().strftime("%d.%m.%Y %H:%M")
@@ -674,19 +697,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-        if text == "📊 Statistika":
+        ADMIN_BUTTONS = {
+            "📊 Statistika", "⏳ To'lovlar", "👥 Foydalanuvchilar",
+            "📢 E'lon", "📋 Kanallar", "⚙️ Limitlar",
+            "👑 VIP berish", "💰 Balans"
+        }
+        _t = text.strip()
+        if _t == "📊 Statistika":
             await admin_stats_msg(update, context); return
-        elif text == "⏳ To'lovlar":
+        elif _t == "⏳ To'lovlar":
             await admin_pending_msg(update, context); return
-        elif text == "👥 Foydalanuvchilar":
+        elif _t == "👥 Foydalanuvchilar":
             await admin_users_msg(update, context); return
-        elif text == "📢 E'lon":
+        elif _t == "📢 E'lon":
             await update.message.reply_text(
                 "📢 /broadcast <xabar> — obunachilarga\n/broadcast all <xabar> — hammaga"
             ); return
-        elif text == "📋 Kanallar":
+        elif _t == "📋 Kanallar":
             await admin_list_channels_msg(update, context); return
-        elif text == "⚙️ Limitlar":
+        elif _t == "⚙️ Limitlar":
             normal = db.get_setting("normal_limit", str(Config.DAILY_LIMIT_NORMAL))
             vip    = db.get_setting("vip_limit",    str(Config.DAILY_LIMIT_VIP))
             await update.message.reply_text(
@@ -696,7 +725,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"O'zgartirish:\n/setlimit normal 5\n/setlimit vip 50",
                 parse_mode=ParseMode.HTML
             ); return
-        elif text == "👑 VIP berish":
+        elif _t == "👑 VIP berish":
             context.user_data["admin_action"] = "setvip"
             await update.message.reply_text(
                 "👑 <b>VIP berish</b>\n\n"
@@ -707,7 +736,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("❌ Bekor qilish", callback_data="admin_cancel")
                 ]])
             ); return
-        elif text == "💰 Balans":
+        elif _t == "💰 Balans":
             context.user_data["admin_action"] = "addbalance"
             await update.message.reply_text(
                 "💰 <b>Balans qo'shish</b>\n\n"
@@ -720,20 +749,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ); return
 
     # ── Foydalanuvchi klaviatura tugmalari ────────────────────────────────────
-    # Bu tugmalar obuna tekshiruvisiz ishlaydi
-    if not is_admin(user.id):
-        if text == "📊 Hisobim":
-            await balance_command(update, context); return
-        elif text == "👥 Referral":
-            await referral_command(update, context); return
-        elif text == "ℹ️ Status":
-            await status_command(update, context); return
-        elif text == "🗑 Tarixni tozalash":
-            await clear_command(update, context); return
-        elif text == "📖 Yordam":
-            await help_command(update, context); return
-        elif text == "🤖 AI Savol":
-            await message.reply_text("💬 Savolingizni yozing! 🚀"); return
+    # text.strip() — Telegram ba'zan trailing space yuborishi mumkin
+    _t = text.strip()
+    USER_BUTTONS = {
+        "🤖 AI Savol", "📊 Hisobim", "👥 Referral",
+        "ℹ️ Status", "🗑 Tarixni tozalash", "📖 Yordam"
+    }
+    if not is_admin(user.id) and _t in USER_BUTTONS:
+        if _t == "📊 Hisobim":
+            await balance_command(update, context)
+        elif _t == "👥 Referral":
+            await referral_command(update, context)
+        elif _t == "ℹ️ Status":
+            await status_command(update, context)
+        elif _t == "🗑 Tarixni tozalash":
+            await clear_command(update, context)
+        elif _t == "📖 Yordam":
+            await help_command(update, context)
+        elif _t == "🤖 AI Savol":
+            await message.reply_text("💬 Savolingizni yozing! 🚀")
+        return  # Har doim return — AI ga yetkazma
 
     # ── Majburiy kanal tekshirish ──────────────────────────────────────────────
     if not is_admin(user.id):
@@ -742,16 +777,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("📢 Avval quyidagi kanallarga obuna bo'ling:", reply_markup=channel_keyboard(not_joined))
             return
 
-    # ── Obuna tekshirish ───────────────────────────────────────────────────────
+    # ── Trial / Obuna tekshirish ──────────────────────────────────────────────
     if not is_admin(user.id) and not db.is_active_subscriber(user.id):
-        await message.reply_text(
-            f"🔒 <b>Obuna kerak!</b>\n\n"
-            f"⭐ Oddiy — {Config.SUBSCRIPTION_PRICE_UZS:,} so'm/oy\n"
-            f"👑 VIP — {Config.VIP_PRICE_UZS:,} so'm/oy",
-            parse_mode=ParseMode.HTML,
-            reply_markup=sub_keyboard()
-        )
-        return
+        trial_used = db.get_trial_count(user.id)
+        if trial_used >= Config.TRIAL_LIMIT:
+            # Trial tugagan — obuna so'ralsin
+            await message.reply_text(
+                f"🔒 <b>{Config.TRIAL_LIMIT} ta bepul so'rov tugadi!</b>\n\n"
+                f"Davom etish uchun obuna oling:\n"
+                f"⭐ Oddiy — {Config.SUBSCRIPTION_PRICE_UZS:,} so'm/oy ({Config.DAILY_LIMIT_NORMAL} ta/kun)\n"
+                f"👑 VIP — {Config.VIP_PRICE_UZS:,} so'm/oy ({Config.DAILY_LIMIT_VIP} ta/kun)",
+                parse_mode=ParseMode.HTML,
+                reply_markup=sub_keyboard()
+            )
+            return
+        # Trial davom etadi — bu yerda to'xtatmaymiz, AI ga o'tadi
 
     # ── Matn tekshirish ────────────────────────────────────────────────────────
     if not text:
@@ -803,6 +843,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.log_message(user.id, text, ai_reply)
         if not is_admin(user.id):
             db.increment_daily(user.id)
+            # Trial hisoblash (faqat obunasizlar uchun)
+            if not db.is_active_subscriber(user.id):
+                trial_used = db.increment_trial(user.id)
+                remaining = Config.TRIAL_LIMIT - trial_used
+                if remaining > 0:
+                    await message.reply_text(
+                        f"ℹ️ Bepul sinov: <b>{trial_used}/{Config.TRIAL_LIMIT}</b> — "
+                        f"<b>{remaining} ta</b> so'rov qoldi.",
+                        parse_mode=ParseMode.HTML
+                    )
         await typing.delete()
         await safe_send(message, ai_reply)
     except Exception as e:

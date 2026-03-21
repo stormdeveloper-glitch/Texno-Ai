@@ -588,3 +588,24 @@ class Database:
                 (like, like, like)
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # ─── TRIAL (SINOV) TIZIMI ────────────────────────────────────────────────
+
+    def get_trial_count(self, user_id: int) -> int:
+        """Obunasiz user nechta trial xabar yuborgan."""
+        val = self.get_setting(f"trial_{user_id}", "0")
+        try:
+            return int(val)
+        except Exception:
+            return 0
+
+    def increment_trial(self, user_id: int) -> int:
+        """Trial hisobini oshiradi va yangi qiymatni qaytaradi."""
+        count = self.get_trial_count(user_id) + 1
+        self.set_setting(f"trial_{user_id}", str(count))
+        return count
+
+    def reset_trial(self, user_id: int):
+        """Trial hisobini nolga qaytaradi (obuna olgandan keyin)."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM settings WHERE key=?", (f"trial_{user_id}",))
