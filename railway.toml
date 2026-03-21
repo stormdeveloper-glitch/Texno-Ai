@@ -3,3 +3,6 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "pip install -r requirements.txt && python bot.py"
+
+[[volumes]]
+mountPath = "/app/data"

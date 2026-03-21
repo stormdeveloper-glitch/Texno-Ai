@@ -277,6 +277,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    db.add_user(user.id, user.username, user.full_name)  # foydalanuvchi yo'q bo'lsa qo'shamiz
     stats = db.get_referral_stats(user.id)
     ref_code = db.get_referral_code(user.id)
     bot_username = (await context.bot.get_me()).username
@@ -296,6 +297,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    db.add_user(user.id, user.username, user.full_name)  # foydalanuvchi yo'q bo'lsa qo'shamiz
     ref_code = db.get_referral_code(user.id)
     bot_username = (await context.bot.get_me()).username
     stats = db.get_referral_stats(user.id)
@@ -307,7 +309,8 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Bonus: <b>{stats['total_bonus']:,} so'm</b>\n"
         f"• Balans: <b>{stats['balance']:,} so'm</b>\n\n"
         f"🔗 <b>Havolangiz:</b>\n"
-        f"<code>https://t.me/{bot_username}?start={ref_code}</code>",
+        f"<code>https://t.me/{bot_username}?start={ref_code}</code>\n\n"
+        f"👆 Nusxalab do'stlaringizga yuboring!",
         parse_mode=ParseMode.HTML
     )
 
@@ -383,6 +386,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.clear_pending_check(user.id)
         context.user_data.pop("waiting_check", None)
         await query.edit_message_text("❌ Bekor qilindi.\n\n/start — bosh menyuga qaytish")
+        return
+
+    if query.data == "admin_cancel":
+        await query.answer()
+        context.user_data.pop("admin_action", None)
+        await query.edit_message_text("❌ Bekor qilindi.")
         return
 
     # ─── BUG FIX: approve_ da payment_type tekshiriladi ───────────
@@ -580,6 +589,91 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Admin klaviatura tugmalari ─────────────────────────────────────────────
     if is_admin(user.id):
+        # Admin action (VIP berish / Balans) - kutilayotgan kirish
+        admin_action = context.user_data.get("admin_action")
+        if admin_action and text and not text.startswith("/"):
+            if admin_action == "setvip":
+                context.user_data.pop("admin_action", None)
+                if text.strip().isdigit():
+                    target_id = int(text.strip())
+                    db.set_vip(target_id, True)
+                    if not db.is_active_subscriber(target_id):
+                        db.activate_subscription(target_id)
+                    vip_limit = db.get_setting("vip_limit", str(Config.DAILY_LIMIT_VIP))
+                    await update.message.reply_text(
+                        f"✅ <code>{target_id}</code> ga 👑 <b>VIP berildi!</b>\n"
+                        f"Kunlik limit: <b>{vip_limit} ta</b>",
+                        parse_mode=ParseMode.HTML
+                    )
+                    try:
+                        await context.bot.send_message(
+                            chat_id=target_id,
+                            text=f"🎉 <b>Sizga 👑 VIP status berildi!</b>\n"
+                                 f"Kunlik limit: <b>{vip_limit} ta xabar</b> 🚀",
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=main_keyboard(target_id)
+                        )
+                    except Exception: pass
+                else:
+                    await update.message.reply_text(
+                        "❌ Noto'g'ri format! Faqat raqam (User ID) kiriting.\n"
+                        "💡 /users — foydalanuvchilar ro'yxati"
+                    )
+                return
+            elif admin_action == "addbalance":
+                context.user_data.pop("admin_action", None)
+                parts = text.strip().split()
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    target_id = int(parts[0]); amount = int(parts[1])
+                    with db._conn() as conn:
+                        conn.execute(
+                            "UPDATE users SET balance = balance + ? WHERE user_id=?",
+                            (amount, target_id)
+                        )
+                    new_balance = db.get_balance(target_id)
+                    await update.message.reply_text(
+                        f"✅ <code>{target_id}</code> ga <b>{amount:,} so'm</b> qo'shildi!\n"
+                        f"Yangi balans: <b>{new_balance:,} so'm</b>",
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    await update.message.reply_text(
+                        "❌ Noto'g'ri format!\nTo'g'ri: <code>123456789 5000</code>",
+                        parse_mode=ParseMode.HTML
+                    )
+                return
+
+            elif admin_action == "search_user":
+                context.user_data.pop("admin_action", None)
+                q = text.strip().lstrip("@")
+                results = db.search_users(q)
+                if not results:
+                    await update.message.reply_text(
+                        "❌ Hech narsa topilmadi. Qayta urinib ko'ring.",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🔍 Yana qidirish", callback_data="users_search"),
+                            InlineKeyboardButton("◀️ Orqaga", callback_data="users_main"),
+                        ]])
+                    )
+                    return
+                text_out = f"🔍 <b>Qidiruv natijalari: {len(results)} ta</b>\n{'─'*28}\n"
+                buttons  = []
+                for r in results:
+                    icon  = "✅" if r["is_active"] else "❌"
+                    vip_i = "👑 " if r.get("is_vip") and r["is_active"] else ""
+                    uname = f"@{r['username']}" if r.get("username") else ""
+                    text_out += f"{icon} {vip_i}<b>{r['full_name']}</b> {uname} — <code>{r['user_id']}</code>\n"
+                    buttons.append([InlineKeyboardButton(
+                        f"{icon}{vip_i}{r['full_name'][:25]}",
+                        callback_data=f"user_detail_{r['user_id']}"
+                    )])
+                buttons.append([InlineKeyboardButton("◀️ Orqaga", callback_data="users_main")])
+                await update.message.reply_text(
+                    text_out, parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+                return
+
         if text == "📊 Statistika":
             await admin_stats_msg(update, context); return
         elif text == "⏳ To'lovlar":
@@ -603,19 +697,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML
             ); return
         elif text == "👑 VIP berish":
+            context.user_data["admin_action"] = "setvip"
             await update.message.reply_text(
-                "👑 <b>VIP boshqaruvi:</b>\n\n"
-                "/setvip <user_id> — VIP berish\n"
-                "/removevip <user_id> — VIP olish",
-                parse_mode=ParseMode.HTML
+                "👑 <b>VIP berish</b>\n\n"
+                "VIP bermoqchi bo'lgan foydalanuvchining <b>User ID</b> sini yuboring:\n\n"
+                "💡 User ID ni /users buyrug'i orqali topishingiz mumkin.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Bekor qilish", callback_data="admin_cancel")
+                ]])
             ); return
         elif text == "💰 Balans":
+            context.user_data["admin_action"] = "addbalance"
             await update.message.reply_text(
-                "💰 /addbalance <user_id> <summa> — balans qo'shish",
-                parse_mode=ParseMode.HTML
+                "💰 <b>Balans qo'shish</b>\n\n"
+                "<code>user_id summa</code> formatida yuboring.\n\n"
+                "Misol: <code>123456789 5000</code>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Bekor qilish", callback_data="admin_cancel")
+                ]])
             ); return
 
     # ── Foydalanuvchi klaviatura tugmalari ────────────────────────────────────
+    # Bu tugmalar obuna tekshiruvisiz ishlaydi
     if not is_admin(user.id):
         if text == "📊 Hisobim":
             await balance_command(update, context); return
@@ -775,29 +880,357 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await admin_stats_msg(update, context)
 
 
+def users_panel_keyboard() -> InlineKeyboardMarkup:
+    """Foydalanuvchilar tizimi asosiy menyusi."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Faol obunalar",    callback_data="users_active"),
+         InlineKeyboardButton("❌ Obunasizlar",      callback_data="users_inactive")],
+        [InlineKeyboardButton("👑 VIP lar",          callback_data="users_vip"),
+         InlineKeyboardButton("🆕 Yangi (7 kun)",   callback_data="users_new")],
+        [InlineKeyboardButton("👥 Referral hisobi",  callback_data="users_referrals")],
+        [InlineKeyboardButton("🔍 Qidirish",         callback_data="users_search")],
+    ])
+
+
 async def admin_users_msg(update, context):
+    s = db.get_stats()
     users = db.get_all_users()
-    text = "👥 <b>Foydalanuvchilar:</b>\n\n"
-    for u in users[:30]:
-        icon     = "✅" if u["is_active"] else "❌"
-        vip_icon = " 👑" if u.get("is_vip") and u["is_active"] else ""
-        end_str  = ""
-        if u["subscription_end"]:
-            try:
-                end = datetime.fromisoformat(u["subscription_end"])
-                end_str = f" | {end.strftime('%d.%m.%Y')}"
-            except Exception:
-                pass
-        balance = u.get("balance", 0) or 0
-        text += f"{icon}{vip_icon} {u['full_name']} (@{u['username'] or '-'}) — <code>{u['user_id']}</code>{end_str} | 💰{balance:,}\n"
-    if len(users) > 30:
-        text += f"\n... va yana {len(users)-30} ta"
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    normal_limit = db.get_setting("normal_limit", str(Config.DAILY_LIMIT_NORMAL))
+    vip_limit    = db.get_setting("vip_limit",    str(Config.DAILY_LIMIT_VIP))
+
+    text = (
+        f"👥 <b>Foydalanuvchilar tizimi</b>\n"
+        f"{'─' * 30}\n"
+        f"📊 Jami: <b>{s['total_users']}</b> ta\n"
+        f"✅ Faol obunalar: <b>{s['active_subs']}</b> ta\n"
+        f"👑 VIP: <b>{s['vip_users']}</b> ta\n"
+        f"❌ Obunasizlar: <b>{s['total_users'] - s['active_subs']}</b> ta\n"
+        f"{'─' * 30}\n"
+        f"💬 Bugungi xabarlar: <b>{s['today_messages']}</b>\n"
+        f"👥 Jami referrallar: <b>{s['total_referrals']}</b>\n"
+        f"🎁 Tarqatilgan bonus: <b>{s['total_bonuses']:,} so'm</b>\n"
+        f"{'─' * 30}\n"
+        f"⚙️ Oddiy limit: <b>{normal_limit} ta/kun</b>\n"
+        f"👑 VIP limit: <b>{vip_limit} ta/kun</b>\n\n"
+        f"👇 Bo'lim tanlang:"
+    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=users_panel_keyboard())
+    else:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=users_panel_keyboard())
 
 
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     await admin_users_msg(update, context)
+
+
+def format_user_row(u: dict) -> str:
+    """Ro'yxat uchun qisqa user satri."""
+    icon     = "✅" if u["is_active"] else "❌"
+    vip_icon = " 👑" if u.get("is_vip") and u["is_active"] else ""
+    end_str  = ""
+    if u.get("subscription_end"):
+        try:
+            end = datetime.fromisoformat(u["subscription_end"])
+            end_str = f" [{end.strftime('%d.%m')}]"
+        except Exception:
+            pass
+    balance  = u.get("balance", 0) or 0
+    name     = u["full_name"][:20]
+    uname    = f"@{u['username']}" if u.get("username") else "—"
+    return f"{icon}{vip_icon} <b>{name}</b> {uname}\n   🆔 <code>{u['user_id']}</code>{end_str} 💰{balance:,}\n"
+
+
+def back_to_users_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Orqaga", callback_data="users_main")]])
+
+
+async def handle_users_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchilar paneli barcha callback lari."""
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin emas!", show_alert=True)
+        return
+    await query.answer()
+    data = query.data
+
+    # ── Asosiy menyu ──
+    if data == "users_main":
+        await admin_users_msg(update, context)
+        return
+
+    # ── Faol obunalar ──
+    if data == "users_active":
+        users = [u for u in db.get_all_users() if u["is_active"]]
+        text = f"✅ <b>Faol obunalar — {len(users)} ta</b>\n{'─'*28}\n"
+        for u in users[:40]:
+            text += format_user_row(u)
+        if len(users) > 40:
+            text += f"\n... yana {len(users)-40} ta"
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔍 Batafsil ko'rish", callback_data="users_search")],
+            [InlineKeyboardButton("◀️ Orqaga", callback_data="users_main")]
+        ]))
+        return
+
+    # ── Obunasizlar ──
+    if data == "users_inactive":
+        users = [u for u in db.get_all_users() if not u["is_active"]]
+        text = f"❌ <b>Obunasiz foydalanuvchilar — {len(users)} ta</b>\n{'─'*28}\n"
+        for u in users[:40]:
+            text += format_user_row(u)
+        if len(users) > 40:
+            text += f"\n... yana {len(users)-40} ta"
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_to_users_kb())
+        return
+
+    # ── VIP lar ──
+    if data == "users_vip":
+        users = [u for u in db.get_all_users() if u.get("is_vip") and u["is_active"]]
+        text = f"👑 <b>VIP foydalanuvchilar — {len(users)} ta</b>\n{'─'*28}\n"
+        for u in users:
+            end_str = ""
+            if u.get("subscription_end"):
+                try:
+                    end = datetime.fromisoformat(u["subscription_end"])
+                    end_str = f"\n   📅 {end.strftime('%d.%m.%Y')} gacha"
+                except Exception:
+                    pass
+            balance = u.get("balance", 0) or 0
+            uname = f"@{u['username']}" if u.get("username") else "—"
+            text += (
+                f"👑 <b>{u['full_name']}</b> {uname}\n"
+                f"   🆔 <code>{u['user_id']}</code> 💰{balance:,}{end_str}\n"
+            )
+        if not users:
+            text += "Hozircha VIP foydalanuvchilar yo'q."
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_to_users_kb())
+        return
+
+    # ── Yangi (7 kun) ──
+    if data == "users_new":
+        from datetime import timedelta
+        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        all_users = db.get_all_users()
+        users = [u for u in all_users if u.get("created_at", "") >= week_ago]
+        text = f"🆕 <b>Oxirgi 7 kunda qo'shilganlar — {len(users)} ta</b>\n{'─'*28}\n"
+        for u in users[:40]:
+            icon  = "✅" if u["is_active"] else "❌"
+            vip_icon = " 👑" if u.get("is_vip") and u["is_active"] else ""
+            uname = f"@{u['username']}" if u.get("username") else "—"
+            reg_str = ""
+            if u.get("created_at"):
+                try:
+                    reg = datetime.fromisoformat(u["created_at"])
+                    reg_str = f" ({reg.strftime('%d.%m %H:%M')})"
+                except Exception:
+                    pass
+            text += f"{icon}{vip_icon} <b>{u['full_name']}</b> {uname} — <code>{u['user_id']}</code>{reg_str}\n"
+        if not users:
+            text += "Bu hafta yangi foydalanuvchi yo'q."
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_to_users_kb())
+        return
+
+    # ── Referral hisobi ──
+    if data == "users_referrals":
+        all_users = db.get_all_users()
+        # Referral qilgan userlarni topish
+        ref_data = []
+        for u in all_users:
+            stats = db.get_referral_stats(u["user_id"])
+            if stats["count"] > 0:
+                ref_data.append((u, stats))
+        ref_data.sort(key=lambda x: x[1]["count"], reverse=True)
+
+        total_bonuses = sum(x[1]["total_bonus"] for x in ref_data)
+        text = (
+            f"👥 <b>Referral hisobi</b>\n{'─'*28}\n"
+            f"🏆 Faol referrerlar: <b>{len(ref_data)} ta</b>\n"
+            f"🎁 Jami tarqatilgan: <b>{total_bonuses:,} so'm</b>\n"
+            f"{'─'*28}\n\n"
+        )
+        for u, stats in ref_data[:30]:
+            uname   = f"@{u['username']}" if u.get("username") else "—"
+            balance = u.get("balance", 0) or 0
+            ref_tree = db.get_referral_tree(u["user_id"])
+            active_refs = sum(1 for r in ref_tree if r["is_active"])
+            text += (
+                f"👤 <b>{u['full_name']}</b> {uname}\n"
+                f"   🆔 <code>{u['user_id']}</code>\n"
+                f"   👥 Taklif: <b>{stats['count']} kishi</b> (✅{active_refs} faol)\n"
+                f"   🎁 Bonus: <b>{stats['total_bonus']:,} so'm</b>\n"
+                f"   💰 Balans: <b>{balance:,} so'm</b>\n\n"
+            )
+            if len(text) > 3500:
+                text += f"... va yana {len(ref_data) - ref_data.index((u, stats)) - 1} ta\n"
+                break
+
+        if not ref_data:
+            text += "Hozircha referral yo'q."
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_to_users_kb())
+        return
+
+    # ── Qidirish ──
+    if data == "users_search":
+        context.user_data["admin_action"] = "search_user"
+        await query.edit_message_text(
+            "🔍 <b>Foydalanuvchi qidirish</b>\n\n"
+            "Quyidagilardan birini yuboring:\n"
+            "• <b>User ID</b>: <code>123456789</code>\n"
+            "• <b>Username</b>: <code>@username</code>\n"
+            "• <b>Ism</b>: <code>Ali</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Bekor qilish", callback_data="users_main")
+            ]])
+        )
+        return
+
+    # ── User batafsil: user_detail_ID ──
+    if data.startswith("user_detail_"):
+        uid = int(data.split("_")[2])
+        await show_user_detail(query, context, uid)
+        return
+
+    # ── User referral daraxti: user_refs_ID ──
+    if data.startswith("user_refs_"):
+        uid = int(data.split("_")[2])
+        tree = db.get_referral_tree(uid)
+        u    = db.get_user_detail(uid)
+        text = (
+            f"👥 <b>{u['full_name']} — Referral ro'yxati</b>\n"
+            f"{'─'*28}\n"
+            f"Jami: <b>{len(tree)} kishi</b> | "
+            f"Bonus: <b>{u['referral_earned']:,} so'm</b>\n"
+            f"{'─'*28}\n\n"
+        )
+        for i, r in enumerate(tree, 1):
+            icon  = "✅" if r["is_active"] else "❌"
+            uname = f"@{r['username']}" if r.get("username") else "—"
+            try:
+                dt = datetime.fromisoformat(r["created_at"]).strftime("%d.%m.%Y")
+            except Exception:
+                dt = "?"
+            text += f"{i}. {icon} <b>{r['full_name']}</b> {uname} — +{r['bonus_amount']:,} so'm ({dt})\n"
+        if not tree:
+            text += "Hali hech kim taklif qilmagan."
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Orqaga", callback_data=f"user_detail_{uid}")
+            ]])
+        )
+        return
+
+    # ── Activate/Deactivate/VIP inline ──
+    if data.startswith("uact_"):
+        uid = int(data.split("_")[1])
+        db.activate_subscription(uid)
+        await query.answer("✅ Obuna faollashtirildi!", show_alert=True)
+        await show_user_detail(query, context, uid)
+        return
+
+    if data.startswith("udeact_"):
+        uid = int(data.split("_")[1])
+        db.deactivate_subscription(uid)
+        await query.answer("❌ Obuna o'chirildi!", show_alert=True)
+        await show_user_detail(query, context, uid)
+        return
+
+    if data.startswith("uvip_"):
+        uid = int(data.split("_")[1])
+        db.set_vip(uid, True)
+        if not db.is_active_subscriber(uid):
+            db.activate_subscription(uid)
+        vip_limit = db.get_setting("vip_limit", str(Config.DAILY_LIMIT_VIP))
+        await query.answer(f"👑 VIP berildi! Limit: {vip_limit}", show_alert=True)
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=f"🎉 <b>Sizga 👑 VIP status berildi!</b>\nKunlik limit: <b>{vip_limit} ta xabar</b> 🚀",
+                parse_mode=ParseMode.HTML, reply_markup=main_keyboard(uid)
+            )
+        except Exception: pass
+        await show_user_detail(query, context, uid)
+        return
+
+    if data.startswith("uunvip_"):
+        uid = int(data.split("_")[1])
+        db.set_vip(uid, False)
+        await query.answer("VIP olindi.", show_alert=True)
+        await show_user_detail(query, context, uid)
+        return
+
+
+async def show_user_detail(query, context, uid: int):
+    """Bitta foydalanuvchi haqida batafsil panel."""
+    u = db.get_user_detail(uid)
+    if not u:
+        await query.edit_message_text("❌ Foydalanuvchi topilmadi.", reply_markup=back_to_users_kb())
+        return
+
+    status  = "✅ Faol" if u["is_active"] else "❌ Obunasiz"
+    vip_str = " 👑 VIP" if u.get("is_vip") and u["is_active"] else ""
+    end_str = "—"
+    if u.get("subscription_end"):
+        try:
+            end = datetime.fromisoformat(u["subscription_end"])
+            days_left = max(0, (end - datetime.now()).days)
+            end_str = f"{end.strftime('%d.%m.%Y')} ({days_left} kun)"
+        except Exception:
+            end_str = u["subscription_end"]
+    reg_str = "?"
+    if u.get("created_at"):
+        try:
+            reg_str = datetime.fromisoformat(u["created_at"]).strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            pass
+    limit = db.get_user_limit(uid)
+
+    # Kim taklif qilgan
+    ref_by_str = "—"
+    if u.get("referred_by_name"):
+        ref_by_uname = f" (@{u['referred_by_username']})" if u.get("referred_by_username") else ""
+        ref_by_str = f"{u['referred_by_name']}{ref_by_uname}"
+
+    text = (
+        f"👤 <b>Foydalanuvchi ma'lumotlari</b>\n"
+        f"{'─'*30}\n"
+        f"🏷 Ism: <b>{u['full_name']}</b>\n"
+        f"🔗 Username: @{u.get('username') or '—'}\n"
+        f"🆔 ID: <code>{u['user_id']}</code>\n"
+        f"{'─'*30}\n"
+        f"📋 Holat: <b>{status}{vip_str}</b>\n"
+        f"📅 Obuna tugashi: <b>{end_str}</b>\n"
+        f"💬 Limit: <b>{limit} ta/kun</b>\n"
+        f"💬 Bugun: <b>{u['today_messages']} ta</b>\n"
+        f"💬 Jami xabar: <b>{u['total_messages']} ta</b>\n"
+        f"{'─'*30}\n"
+        f"💰 Balans: <b>{u.get('balance', 0) or 0:,} so'm</b>\n"
+        f"👥 Taklif qildi: <b>{u['referral_count']} kishi</b>\n"
+        f"🎁 Referraldan: <b>{u['referral_earned']:,} so'm</b>\n"
+        f"🔗 Kim taklif qildi: <b>{ref_by_str}</b>\n"
+        f"📆 Ro'yxatdan: <b>{reg_str}</b>\n"
+    )
+
+    # Inline amallar
+    is_active = u["is_active"]
+    is_vip    = u.get("is_vip") and is_active
+    buttons = []
+    if is_active:
+        buttons.append([InlineKeyboardButton("❌ Obunani o'chirish", callback_data=f"udeact_{uid}")])
+    else:
+        buttons.append([InlineKeyboardButton("✅ Obunani faollashtirish", callback_data=f"uact_{uid}")])
+    if is_vip:
+        buttons.append([InlineKeyboardButton("⭐ VIP ni olish", callback_data=f"uunvip_{uid}")])
+    else:
+        buttons.append([InlineKeyboardButton("👑 VIP berish", callback_data=f"uvip_{uid}")])
+    if u["referral_count"] > 0:
+        buttons.append([InlineKeyboardButton(f"👥 Referrallar ({u['referral_count']})", callback_data=f"user_refs_{uid}")])
+    buttons.append([InlineKeyboardButton("◀️ Orqaga", callback_data="users_main")])
+
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1015,6 +1448,7 @@ def main():
     app.add_handler(CommandHandler("activate",   admin_activate))
     app.add_handler(CommandHandler("deactivate", admin_deactivate))
 
+    app.add_handler(CallbackQueryHandler(handle_users_panel, pattern="^(users_|user_detail_|user_refs_|uact_|udeact_|uvip_|uunvip_)"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
 

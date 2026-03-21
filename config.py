@@ -31,7 +31,7 @@ class Config:
     _vip_admin_id      = os.getenv("VIP_ADMIN_ID", "")
     VIP_ADMIN_ID       = int(_vip_admin_id) if _vip_admin_id.strip().isdigit() else None
 
-    VOLUME_PATH = os.getenv("VOLUME_PATH", "/data")
+    VOLUME_PATH = os.getenv("VOLUME_PATH", "/app/data")
     DB_PATH     = os.path.join(VOLUME_PATH, "bot_database.db")
 
     EXPIRY_WARN_DAYS = 3

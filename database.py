@@ -518,3 +518,73 @@ class Database:
             conn.execute("DELETE FROM settings WHERE key LIKE 'waiting_check_%'")
             conn.execute("VACUUM")
         logger.info("✅ Oylik tozalash bajarildi!")
+
+    # ─── ADMIN: BATAFSIL USER MA'LUMOTLARI ───────────────────────────────────
+
+    def get_user_detail(self, user_id: int):
+        """Bitta foydalanuvchi haqida to'liq ma'lumot."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT user_id, username, full_name, is_active, is_vip,
+                          subscription_end, balance, referral_code, referred_by, created_at
+                   FROM users WHERE user_id=?""",
+                (user_id,)
+            ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            if d["referred_by"]:
+                ref_row = conn.execute(
+                    "SELECT full_name, username FROM users WHERE user_id=?", (d["referred_by"],)
+                ).fetchone()
+                d["referred_by_name"]     = ref_row["full_name"] if ref_row else "?"
+                d["referred_by_username"] = ref_row["username"]  if ref_row else ""
+            else:
+                d["referred_by_name"]     = None
+                d["referred_by_username"] = None
+            ref_count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM referral_history WHERE referrer_id=?", (user_id,)
+            ).fetchone()["cnt"]
+            d["referral_count"] = ref_count
+            ref_earned = conn.execute(
+                "SELECT COALESCE(SUM(bonus_amount),0) as total FROM referral_history WHERE referrer_id=?", (user_id,)
+            ).fetchone()["total"]
+            d["referral_earned"] = ref_earned
+            today = datetime.now().strftime("%Y-%m-%d")
+            today_row = conn.execute(
+                "SELECT COALESCE(message_count,0) as cnt FROM daily_usage WHERE user_id=? AND usage_date=?",
+                (user_id, today)
+            ).fetchone()
+            d["today_messages"] = today_row["cnt"] if today_row else 0
+            total_msgs = conn.execute(
+                "SELECT COUNT(*) as cnt FROM messages WHERE user_id=?", (user_id,)
+            ).fetchone()["cnt"]
+            d["total_messages"] = total_msgs
+            return d
+
+    def get_referral_tree(self, referrer_id: int) -> list:
+        """Referrer taklif qilgan barcha odamlar ro'yxati."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT rh.referred_id, rh.bonus_amount, rh.created_at,
+                          u.full_name, u.username, u.is_active
+                   FROM referral_history rh
+                   JOIN users u ON rh.referred_id = u.user_id
+                   WHERE rh.referrer_id=?
+                   ORDER BY rh.created_at DESC""",
+                (referrer_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def search_users(self, query: str) -> list:
+        """Username, full_name yoki user_id bo'yicha qidirish."""
+        with self._conn() as conn:
+            like = f"%{query}%"
+            rows = conn.execute(
+                """SELECT user_id, username, full_name, is_active, is_vip, subscription_end, balance
+                   FROM users
+                   WHERE CAST(user_id AS TEXT) LIKE ? OR username LIKE ? OR full_name LIKE ?
+                   ORDER BY id DESC LIMIT 20""",
+                (like, like, like)
+            ).fetchall()
+            return [dict(r) for r in rows]
