@@ -125,6 +125,7 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton("👥 Foydalanuvchilar"), KeyboardButton("📢 E'lon")],
         [KeyboardButton("📋 Kanallar"), KeyboardButton("⚙️ Limitlar")],
         [KeyboardButton("👑 VIP berish"), KeyboardButton("💰 Balans")],
+        [KeyboardButton("🤖 Botlar")],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
@@ -567,6 +568,102 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"reject notify error (user {target_id}): {e}")
         return
 
+    # ── Bot buyurtmasi tasdiqlash ─────────────────────────────────────────────
+    if query.data.startswith("approve_newbot_"):
+        if not is_admin(user.id):
+            await query.answer("❌ Siz admin emassiz!", show_alert=True)
+            return
+        parts = query.data.split("_")
+        # approve_newbot_{user_id}_{order_id}_{payment_id}
+        try:
+            target_id  = int(parts[2])
+            order_id   = int(parts[3])
+            payment_id = int(parts[4]) if len(parts) > 4 else None
+        except (IndexError, ValueError):
+            await query.answer("❌ Xato format!", show_alert=True)
+            return
+
+        db.set_order_status(order_id, "pending_token")
+        if payment_id:
+            db.update_payment_status(payment_id, "approved")
+
+        ts = now_tashkent().strftime("%d.%m.%Y %H:%M")
+        try:
+            old_cap = query.message.caption or ""
+            new_cap = old_cap + f"\n\n✅ TASDIQLANDI\n👤 Admin: @{user.username or user.full_name}\n🕐 {ts}"
+            if len(new_cap) > 1024:
+                new_cap = f"✅ Bot buyurtma #{order_id} tasdiqlandi | {ts}"
+            await query.edit_message_caption(caption=new_cap, reply_markup=None)
+        except Exception:
+            pass
+        await query.answer("✅ Tasdiqlandi! Foydalanuvchiga token so'raldi.")
+
+        # Foydalanuvchiga token yuborish so'rovi
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    "🎉 <b>To'lovingiz tasdiqlandi!</b>\n\n"
+                    "Endi bot tokeningizni yuboring.\n\n"
+                    "📌 <b>Token olish:</b>\n"
+                    "1. @BotFather ga o'ting\n"
+                    "2. /newbot buyrug'ini yuboring\n"
+                    "3. Bot nomini kiriting\n"
+                    "4. @username kiriting (oxiri 'bot' bilan tugashi kerak)\n"
+                    "5. Berilgan tokenni <b>shu chatga</b> yuboring\n\n"
+                    "⚠️ <i>Token formati: <code>123456789:AAFxxx...</code></i>"
+                ),
+                parse_mode=ParseMode.HTML
+            )
+            # context.user_data ishlamaydi boshqa session uchun — DB ga yozamiz
+            db.set_setting(f"waiting_bot_token_{target_id}", str(order_id))
+        except Exception as e:
+            logger.error(f"Newbot approve notify error: {e}")
+        return
+
+    if query.data.startswith("reject_newbot_"):
+        if not is_admin(user.id):
+            await query.answer("❌ Siz admin emassiz!", show_alert=True)
+            return
+        parts = query.data.split("_")
+        try:
+            target_id  = int(parts[2])
+            order_id   = int(parts[3])
+            payment_id = int(parts[4]) if len(parts) > 4 else None
+        except (IndexError, ValueError):
+            await query.answer("❌ Xato format!", show_alert=True)
+            return
+
+        db.set_order_status(order_id, "rejected")
+        if payment_id:
+            db.update_payment_status(payment_id, "rejected")
+
+        ts = now_tashkent().strftime("%d.%m.%Y %H:%M")
+        try:
+            old_cap = query.message.caption or ""
+            new_cap = old_cap + f"\n\n❌ RAD ETILDI\n👤 Admin: @{user.username or user.full_name}\n🕐 {ts}"
+            if len(new_cap) > 1024:
+                new_cap = f"❌ Bot buyurtma #{order_id} rad etildi | {ts}"
+            await query.edit_message_caption(caption=new_cap, reply_markup=None)
+        except Exception:
+            pass
+        await query.answer("❌ Rad etildi!")
+
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    "❌ <b>Bot yaratish to'lovi tasdiqlanmadi.</b>\n\n"
+                    "Sabab: chek aniq ko'rinmaydi yoki summa noto'g'ri.\n\n"
+                    f"📞 Admin: @{Config.ADMIN_USERNAME}\n\n"
+                    "Qayta urinish: /newbot"
+                ),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Newbot reject notify error: {e}")
+        return
+
     await query.answer()
 
 # ─── XABAR HANDLER ────────────────────────────────────────────────────────────
@@ -642,6 +739,66 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 except Exception as e:
                     logger.error(f"Admin notify error (admin={admin_id}): {e}")
+            return
+
+        # ── Bot yaratish to'lov cheki ─────────────────────────────────────────
+        # DB dan ham tekshirish (foydalanuvchi qayta kelgan bo'lishi mumkin)
+        if not context.user_data.get("waiting_newbot_check"):
+            # Foydalanuvchining eng so'nggi pending_payment orderini topamiz
+            pending_nb = [o for o in db.get_user_active_orders(user.id)
+                         if o["status"] == "pending_payment"]
+            if pending_nb:
+                context.user_data["waiting_newbot_check"] = True
+                context.user_data["newbot_order_id"]      = pending_nb[0]["id"]
+
+        if context.user_data.get("waiting_newbot_check"):
+            order_id = context.user_data.get("newbot_order_id")
+            if not order_id:
+                await message.reply_text("❌ Buyurtma topilmadi. /newbot dan qayta boshlang.")
+                return
+
+            context.user_data.pop("waiting_newbot_check", None)
+            file_id    = message.photo[-1].file_id
+            payment_id = db.add_payment(user.id, file_id, payment_type="newbot")
+            db.link_order_payment(order_id, payment_id)
+            db.set_order_status(order_id, "pending_payment")
+
+            ts = now_tashkent().strftime("%d.%m.%Y  %H:%M:%S")
+
+            await message.reply_text(
+                "✅ <b>Bot yaratish cheki qabul qilindi!</b>\n\n"
+                "⏳ Admin tekshirmoqda... (5–15 daqiqa)\n\n"
+                "Tasdiqdan so'ng bot tokeningizni so'raymiz 📬",
+                parse_mode=ParseMode.HTML
+            )
+
+            caption_nb = (
+                f"🤖 <b>Bot yaratish buyurtmasi!</b>\n"
+                f"{'─' * 28}\n"
+                f"👤 Ismi: <b>{user.full_name}</b>\n"
+                f"🔗 Username: @{user.username or '—'}\n"
+                f"🆔 User ID: <code>{user.id}</code>\n"
+                f"🏷 Tur: <b>🤖 Bot yaratish</b>\n"
+                f"💰 Summa: <b>{Config.NEWBOT_PRICE:,} so'm</b>\n"
+                f"🕐 Vaqt: <b>{ts} (Toshkent)</b>\n"
+                f"🗂 Buyurtma №: <code>{order_id}</code>\n"
+                f"{'─' * 28}\n⬇️ Tasdiqlash yoki rad etish:"
+            )
+            approve_kb_nb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"approve_newbot_{user.id}_{order_id}_{payment_id}"),
+                InlineKeyboardButton("❌ Rad etish",  callback_data=f"reject_newbot_{user.id}_{order_id}_{payment_id}"),
+            ]])
+            for admin_id in Config.ADMIN_IDS:
+                try:
+                    await context.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=file_id,
+                        caption=caption_nb,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=approve_kb_nb
+                    )
+                except Exception as e:
+                    logger.error(f"Newbot admin notify error: {e}")
             return
 
     # ── Admin klaviatura tugmalari ─────────────────────────────────────────────
@@ -734,7 +891,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ADMIN_BUTTONS = {
             "📊 Statistika", "⏳ To'lovlar", "👥 Foydalanuvchilar",
             "📢 E'lon", "📋 Kanallar", "⚙️ Limitlar",
-            "👑 VIP berish", "💰 Balans"
+            "👑 VIP berish", "💰 Balans", "🤖 Botlar"
         }
         _t = text.strip()
         if _t == "📊 Statistika":
@@ -781,6 +938,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("❌ Bekor qilish", callback_data="admin_cancel")
                 ]])
             ); return
+        elif _t == "🤖 Botlar":
+            await mybots_command(update, context); return
 
     # ── Foydalanuvchi klaviatura tugmalari ────────────────────────────────────
     # text.strip() — Telegram ba'zan trailing space yuborishi mumkin
@@ -826,6 +985,119 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         # Trial davom etadi — bu yerda to'xtatmaymiz, AI ga o'tadi
+
+    # ── Bot token qabul qilish ────────────────────────────────────────────────
+    # DB dan ham tekshirish — admin tasdiqlagan, user qayta kelgan bo'lishi mumkin
+    if not context.user_data.get("waiting_bot_token"):
+        db_order_id = db.get_setting(f"waiting_bot_token_{user.id}", "")
+        if db_order_id and db_order_id.isdigit():
+            context.user_data["waiting_bot_token"] = True
+            context.user_data["newbot_order_id"]   = int(db_order_id)
+
+    if context.user_data.get("waiting_bot_token") and text and not text.startswith("/"):
+        order_id = context.user_data.get("newbot_order_id")
+        token_input = text.strip()
+
+        # Token format tekshiruvi
+        if ":" not in token_input or not token_input.split(":")[0].isdigit():
+            await message.reply_text(
+                "❌ <b>Token formati noto'g'ri!</b>\n\n"
+                "To'g'ri format: <code>123456789:AAFxxx...</code>\n\n"
+                "@BotFather dan tokenni nusxalab yuboring:",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Boshqa odam allaqachon ishlatayaptimi?
+        existing_bots = bot_manager.get_all_bots()
+        if any(b["token"] == token_input for b in existing_bots):
+            await message.reply_text(
+                "❌ Bu token allaqachon tizimda ro'yxatdan o'tgan!\n\n"
+                "Boshqa botdan token oling.",
+            )
+            return
+
+        checking = await message.reply_text("⌛ Token tekshirilmoqda...")
+        try:
+            from telegram import Bot as TGBot
+            test_bot  = TGBot(token=token_input)
+            bot_info  = await test_bot.get_me()
+            real_name = bot_info.first_name
+            bot_uname = bot_info.username
+        except Exception as e:
+            await checking.edit_text(
+                f"❌ <b>Token noto'g'ri yoki bot topilmadi!</b>\n\n"
+                f"Xato: <code>{str(e)[:200]}</code>\n\n"
+                f"Tokenni qayta tekshirib yuboring:",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Barcha ma'lumotlarni saqlash
+        context.user_data.pop("waiting_bot_token", None)
+        context.user_data.pop("newbot_order_id", None)
+        # DB dan ham tozalash
+        db.set_setting(f"waiting_bot_token_{user.id}", "")
+
+        if order_id:
+            db.set_order_token(order_id, token_input, real_name, bot_uname)
+
+        owner_uname = user.username or ""
+        bot_manager.add_bot_record(
+            token=token_input,
+            name=real_name,
+            owner_id=user.id,
+            owner_username=owner_uname
+        )
+
+        await checking.edit_text(
+            f"✅ <b>Token tasdiqlandi!</b>\n\n"
+            f"🤖 @{bot_uname} — {real_name}\n\n"
+            f"⚡ Ishga tushirilmoqda...",
+            parse_mode=ParseMode.HTML
+        )
+
+        ok = await bot_manager.launch_bot(token=token_input, name=real_name)
+        if ok:
+            total    = len(bot_manager.get_all_bots())
+            bot_link = f"https://t.me/{bot_uname}"
+            inline_kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"🤖 @{bot_uname} ni sinab ko'ring", url=bot_link)
+            ]])
+            await checking.edit_text(
+                f"🎉 <b>Botingiz muvaffaqiyatli ishga tushdi!</b>\n\n"
+                f"🤖 <b>{real_name}</b> (@{bot_uname})\n"
+                f"👤 Admin (siz): @{owner_uname or user.full_name}\n"
+                f"💾 Railway Volume ga saqlandi\n"
+                f"🔄 Server restart da avtomatik tiklanadi\n\n"
+                f"📊 Sizning botlaringiz: <b>{db.count_user_bots(user.id)}/{Config.NEWBOT_MAX_PER_USER}</b>\n\n"
+                f"👇 Botingizni boshqalarga ulashing:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=inline_kb
+            )
+            # Asosiy adminlarga xabar
+            for admin_id in Config.ADMIN_IDS:
+                try:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"✅ <b>Yangi bot ishga tushdi!</b>\n\n"
+                            f"👤 Egasi: @{owner_uname or user.full_name} (<code>{user.id}</code>)\n"
+                            f"🤖 @{bot_uname} — {real_name}\n"
+                            f"📊 Jami botlar: {total} ta"
+                        ),
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+        else:
+            await checking.edit_text(
+                f"⚠️ <b>Token saqlandi, lekin bot ishga tushmadi!</b>\n\n"
+                f"Ehtimol @{bot_uname} boshqa serverda ishlamoqda.\n"
+                f"Texnik yordam: @{Config.ADMIN_USERNAME}",
+                parse_mode=ParseMode.HTML
+            )
+        return
 
     # ── Matn tekshirish ────────────────────────────────────────────────────────
     if not text:
@@ -1486,128 +1758,86 @@ async def admin_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def newbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Admin yangi bot qo'shadi.
-    - Token yuborgan odamning user_id va username i saqlanadi
-    - U yaratilgan botning admini bo'ladi (to'lovlar unga yo'naltiriladi)
-    - Bot ishga tushgandan keyin inline havola va yo'riqnoma yuboriladi
+    HAMMA uchun ochiq /newbot komandasi.
+    Flow:
+      1. Foydalanuvchi /newbot yozadi
+      2. Limit tekshiriladi (max 3 bot/odam)
+      3. To'lov ma'lumotlari ko'rsatiladi, chek yuborishi so'raladi
+      4. Foydalanuvchi chek rasmi yuboradi -> adminga ketadi
+      5. Admin tasdiqlaydi -> foydalanuvchiga token yuborish so'raladi
+      6. Foydalanuvchi token yuboradi -> bot yaratiladi, inline havola beriladi
     """
     user = update.effective_user
-    if not is_admin(user.id):
-        await update.message.reply_text("❌ Faqat adminlar uchun!")
+    db.add_user(user.id, user.username, user.full_name)
+
+    # ── Limit tekshiruvi ──────────────────────────────────────────────────────
+    current_count = db.count_user_bots(user.id)
+    max_bots      = Config.NEWBOT_MAX_PER_USER
+
+    if current_count >= max_bots:
+        existing = db.get_user_active_orders(user.id)
+        lines = ["❌ <b>Bot limitiga yetdingiz!</b>\n",
+                 f"Siz maksimal <b>{max_bots} ta</b> bot yarata olasiz.\n",
+                 "\n📋 <b>Sizning botlaringiz:</b>\n"]
+        for i, o in enumerate(existing, 1):
+            uname = f"@{o['bot_username']}" if o.get("bot_username") else o.get("bot_name","?")
+            lines.append(f"{i}. {uname}\n")
+        await update.message.reply_text("".join(lines), parse_mode=ParseMode.HTML)
         return
 
-    args = context.args
-    if not args or len(args) < 2:
+    # ── Pending token holatida bo'lsa ─────────────────────────────────────────
+    pending_orders = [o for o in db.get_user_active_orders(user.id)
+                      if o["status"] == "pending_token"]
+    if pending_orders:
+        order = pending_orders[0]
+        context.user_data["newbot_order_id"]   = order["id"]
+        context.user_data["waiting_bot_token"] = True
+        db.set_setting(f"waiting_bot_token_{user.id}", str(order["id"]))
         await update.message.reply_text(
-            "❓ <b>Foydalanish:</b>\n\n"
-            "<code>/newbot TOKEN BotNomi</code>\n\n"
-            "📌 <b>Misol:</b>\n"
-            "<code>/newbot 7812345678:AAFxxx... MyNewBot</code>\n\n"
-            "💡 Tokenni @BotFather dan olasiz.",
+            "⏳ <b>Sizda to'lov tasdiqlangan, token kutilmoqda!</b>\n\n"
+            "🤖 Bot tokeningizni yuboring.\n\n"
+            "📌 <b>Token olish:</b>\n"
+            "1. @BotFather ga o'ting\n"
+            "2. /newbot buyrug'ini yuboring\n"
+            "3. Bot nomini kiriting\n"
+            "4. @username kiriting (oxiri 'bot' bilan tugashi kerak)\n"
+            "5. Berilgan tokenni <b>shu chatga</b> yuboring\n\n"
+            "⚠️ <i>Token formati: <code>123456789:AAFxxx...</code></i>",
             parse_mode=ParseMode.HTML
         )
         return
 
-    token = args[0].strip()
-    name  = " ".join(args[1:]).strip()
+    # ── To'lov ma'lumotlari ───────────────────────────────────────────────────
+    price    = Config.NEWBOT_PRICE
+    remaining = max_bots - current_count
 
-    if ":" not in token or not token.split(":")[0].isdigit():
-        await update.message.reply_text(
-            "❌ <b>Token formati noto'g'ri!</b>\n\n"
-            "To'g'ri format: <code>123456789:AAFxxx...</code>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-    existing = bot_manager.get_all_bots()
-    if any(b["token"] == token for b in existing):
-        await update.message.reply_text("⚠️ Bu token allaqachon ro'yxatda mavjud!\n\n/mybots")
-        return
-
-    checking_msg = await update.message.reply_text("⌛ Token tekshirilmoqda...")
-    try:
-        from telegram import Bot as TGBot
-        test_bot  = TGBot(token=token)
-        bot_info  = await test_bot.get_me()
-        real_name = bot_info.first_name
-        username  = bot_info.username
-    except Exception as e:
-        await checking_msg.edit_text(
-            f"❌ <b>Token noto'g'ri yoki bot topilmadi!</b>\n\n"
-            f"Xato: <code>{str(e)[:200]}</code>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-    # owner = token yuborgan odam (bu botning admini)
-    owner_uname = user.username or ""
-    bot_manager.add_bot_record(
-        token=token,
-        name=name,
-        owner_id=user.id,
-        owner_username=owner_uname
-    )
-
-    await checking_msg.edit_text(
-        f"✅ <b>Token tasdiqlandi!</b>\n\n"
-        f"🤖 Bot: <b>{real_name}</b> (@{username})\n"
-        f"🏷 Nom: <b>{name}</b>\n"
-        f"👤 Admin: @{owner_uname or user.full_name}\n\n"
-        f"⚡ Ishga tushirilmoqda...",
-        parse_mode=ParseMode.HTML
-    )
-
-    ok = await bot_manager.launch_bot(token=token, name=name)
-
-    if ok:
-        total    = len(bot_manager.get_all_bots())
-        bot_link = f"https://t.me/{username}"
-
-        # Asosiy xabar + inline havola
-        inline_kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton(f"🤖 @{username} ni sinab ko'ring", url=bot_link)
+    await update.message.reply_text(
+        f"🤖 <b>Yangi bot yaratish</b>\n\n"
+        f"💰 Narxi: <b>{price:,} so'm</b> (bir martalik)\n"
+        f"📊 Sizda qolgan slot: <b>{remaining}/{max_bots}</b>\n\n"
+        f"✅ <b>Nima olasiz:</b>\n"
+        f"• O'z Telegram botingiz\n"
+        f"• Bot obunachilari to'lovini siz olasiz\n"
+        f"• Boshqalarga ulashish uchun inline havola\n"
+        f"• Server restart da avtomatik tiklanadi\n\n"
+        f"📋 <b>To'lov tartibi:</b>\n"
+        f"1️⃣ Quyidagi adminga <b>{price:,} so'm</b> o'tkaring\n"
+        f"2️⃣ To'lov chekini (screenshot) <b>shu chatga</b> yuboring\n"
+        f"3️⃣ Tasdiqdan so'ng bot tokeningizni so'raymiz\n\n"
+        f"👇 Admin bilan bog'lanish:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                f"💳 Admin — @{Config.ADMIN_USERNAME}",
+                url=f"https://t.me/{Config.ADMIN_USERNAME}"
+            )
         ]])
+    )
 
-        await checking_msg.edit_text(
-            f"🎉 <b>Bot muvaffaqiyatli ishga tushdi!</b>\n\n"
-            f"🤖 <b>{real_name}</b> (@{username})\n"
-            f"🏷 Nom: <b>{name}</b>\n"
-            f"👤 Bot admini: @{owner_uname or user.full_name}\n"
-            f"💾 Railway Volume ga saqlandi\n"
-            f"🔄 Server restart da avtomatik tiklanadi\n\n"
-            f"📊 Jami botlar: <b>{total} ta</b>\n\n"
-            f"⚠️ <b>Diqqat foydalanuvchilarga:</b>\n"
-            f"Botni sinab ko'ring va obuna uchun\n"
-            f"asosiy adminga to'lov qiling 👇",
-            parse_mode=ParseMode.HTML,
-            reply_markup=inline_kb
-        )
-
-        # Boshqa adminlarga xabar
-        for admin_id in Config.ADMIN_IDS:
-            if admin_id != user.id:
-                try:
-                    await context.bot.send_message(
-                        chat_id=admin_id,
-                        text=(
-                            f"🆕 <b>Yangi bot qo'shildi!</b>\n\n"
-                            f"👤 Kim qo'shdi: @{owner_uname or user.full_name}\n"
-                            f"🤖 @{username} — {real_name}\n"
-                            f"🏷 Nom: {name}\n\n"
-                            f"💡 Bu botga to'lovlar @{owner_uname} ga boradi."
-                        ),
-                        parse_mode=ParseMode.HTML
-                    )
-                except Exception:
-                    pass
-    else:
-        await checking_msg.edit_text(
-            f"⚠️ <b>Bot JSON ga saqlandi, lekin ishga tushmadi!</b>\n\n"
-            f"Ehtimol token boshqa serverda ishlamoqda.\n"
-            f"@{username} ni @BotFather orqali tekshiring.\n\n"
-            f"/mybots — botlar ro'yxati",
-            parse_mode=ParseMode.HTML
-        )
+    # DB ga pending_payment orderi yaratamiz
+    order_id = db.create_bot_order(user.id)
+    context.user_data["newbot_order_id"]      = order_id
+    context.user_data["waiting_newbot_check"] = True
 
 # ─── /mybots ──────────────────────────────────────────────────────────────────
 

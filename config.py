@@ -29,6 +29,10 @@ class Config:
 
     REFERRAL_BONUS_UZS = int(os.getenv("REFERRAL_BONUS_UZS", "1000"))
 
+    # ── Bot yaratish tizimi ───────────────────────────────────────────────────
+    NEWBOT_PRICE        = int(os.getenv("NEWBOT_PRICE",        "49999"))  # bot yaratish narxi (so'm)
+    NEWBOT_MAX_PER_USER = int(os.getenv("NEWBOT_MAX_PER_USER", "3"))      # har bir foydalanuvchi max botlar
+
     # ── VIP admin — faqat shu admin VIP to'lovlarini ko'radi va tasdiqlaydi ──
     VIP_ADMIN_USERNAME = os.getenv("VIP_ADMIN_USERNAME", "Teacher_texnoo")
     _vip_admin_id      = os.getenv("VIP_ADMIN_ID", "")
@@ -54,3 +58,4 @@ class Config:
         print(f"💰 Narxlar: Oddiy={cls.SUBSCRIPTION_PRICE_UZS} | VIP={cls.VIP_PRICE_UZS}")
         print(f"📊 Limitlar: Oddiy={cls.DAILY_LIMIT_NORMAL} | VIP={cls.DAILY_LIMIT_VIP}")
         print(f"👑 VIP admin: @{cls.VIP_ADMIN_USERNAME} (ID: {cls.VIP_ADMIN_ID})")
+        print(f"🤖 Bot yaratish: {cls.NEWBOT_PRICE:,} so'm | Max: {cls.NEWBOT_MAX_PER_USER} ta/odam")

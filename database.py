@@ -88,6 +88,18 @@ class Database:
                     bonus_amount INTEGER DEFAULT 0,
                     created_at   TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS bot_orders (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id      INTEGER NOT NULL,
+                    payment_id   INTEGER,
+                    token        TEXT,
+                    bot_name     TEXT,
+                    bot_username TEXT,
+                    status       TEXT DEFAULT 'pending_payment',
+                    created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                );
             """)
             # Migration: eski DB larga yangi ustunlar qo'shish
             for col, defval in [
@@ -105,6 +117,15 @@ class Database:
                 conn.execute("ALTER TABLE payments ADD COLUMN payment_type TEXT DEFAULT 'normal'")
             except Exception:
                 pass
+            # bot_orders migration
+            for col, defval in [
+                ("bot_username", "TEXT"),
+                ("payment_id",   "INTEGER"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE bot_orders ADD COLUMN {col} {defval}")
+                except Exception:
+                    pass
         logger.info("✅ Database tayyor!")
 
     # ─── FOYDALANUVCHILAR ─────────────────────────────────────────────────────
