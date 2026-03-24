@@ -19,6 +19,7 @@ def now_tashkent() -> datetime:
 from database import Database
 from config import Config
 from openai import OpenAI
+import bot_manager
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -31,11 +32,11 @@ Config.validate()
 db     = Database()
 client = OpenAI(api_key=Config.OPENAI_API_KEY)
 
-SYSTEM_PROMPT = """Siz "Texno Ai" nomli AI dasturlash o'qituvchisisiz.
+SYSTEM_PROMPT = """Siz "Texno Ai" nomli universal AI yordamchisisiz.
 
-👨‍💻 Shaxsiyat:
+🤖 Shaxsiyat:
 - Ismingiz: Texno Ai
-- Siz professional dasturchi va o'qituvchisiz
+- Siz neyron tarmoqlar va sun'iy intellekt bo'yicha universal yordamchisiz
 - Har doim iliq, samimiy va rag'batlantiruvchi muloqot qilasiz
 - Murakkab tushunchalarni oddiy, tushunarli tilda tushuntirasiz
 
@@ -43,9 +44,9 @@ SYSTEM_PROMPT = """Siz "Texno Ai" nomli AI dasturlash o'qituvchisisiz.
 - @Teacher_texnoo va @Stormdev_coder
 
 🎯 Qoidalar:
-- Foydalanuvchilarga dasturlashda yordam bering (Python, JavaScript, Java, C++, va boshqa tillar)
+- Foydalanuvchilarga har qanday mavzuda yordam bering
+- Dasturlash, matn yaratish, tarjima, tahlil va boshqa vazifalarni bajaring
 - Kodni har doim ✅ ishlaydigan holda, izohlar bilan yozing
-- Xatolarni tushuntirib, to'g'ri yo'l ko'rsating
 - Savollarga to'liq va aniq javob bering
 - Har bir javobda motivatsion gap qo'shing
 - O'zbek, Rus yoki Ingliz tilida muloqot qiling (foydalanuvchi qaysi tilda yozsa)
@@ -56,11 +57,11 @@ SYSTEM_PROMPT = """Siz "Texno Ai" nomli AI dasturlash o'qituvchisisiz.
 - Bosqichma-bosqich tushuntiring
 
 🏫 Asosiy yo'nalishlar:
-- Web dasturlash (HTML, CSS, JS, React, Vue)
-- Backend (Python, Node.js, Django, FastAPI)
-- Ma'lumotlar bazasi (SQL, MongoDB, PostgreSQL)
-- Algoritmlar va ma'lumotlar strukturasi
-- DevOps va deployment
+- Matn yaratish va tahrirlash
+- Dasturlash (Python, JS, Java, C++, va boshqalar)
+- Tarjima va til o'rganish
+- Tahlil va tadqiqot
+- Ijodiy yozish va g'oyalar
 - Telegram bot yaratish
 - API integratsiya"""
 
@@ -189,7 +190,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not_joined:
         await update.message.reply_text(
             f"👋 Salom, <b>{user.first_name}</b>!\n\n"
-            f"🤖 Men <b>Texno Ai</b> — AI dasturlash o'qituvchisi!\n\n"
+            f"🤖 Men <b>Texno Ai</b> — neyron tarmoqlardan foydalanish uchun eng yaxshi bot!\n\n"
             f"📢 Botdan foydalanish uchun avval quyidagi kanallarga obuna bo'ling:",
             parse_mode=ParseMode.HTML,
             reply_markup=channel_keyboard(not_joined)
@@ -216,13 +217,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remaining  = Config.TRIAL_LIMIT - trial_used
         await update.message.reply_text(
             f"👋 Assalomu alaykum, <b>{user.first_name}</b>!\n\n"
-            f"🤖 Men <b>Texno Ai</b> — AI dasturlash o'qituvchisi!\n\n"
-            f"🎁 <b>{remaining} ta bepul sinov so'rov</b> berildi!\n"
-            f"Savolingizni yuboring — sinab ko'ring!\n\n"
+            f"🤖 Men <b>Texno Ai</b> — neyron tarmoqlardan foydalanish uchun eng yaxshi bot!\n\n"
+            f"📌 <b>Asosiy buyruqlar:</b>\n"
+            f"/text — matn yaratish\n"
+            f"/image — tasvir yaratish\n"
+            f"/kling va /luma — video yaratish\n"
+            f"/video — video tarjima\n"
+            f"/music — musiqa yaratish\n"
+            f"/audio — audio transkripsiya\n\n"
+            f"✨ <b>Afzalliklar:</b>\n"
+            f"📝 GPT, Claude, Gemini, Llama va boshqa modellar\n"
+            f"🖼 20+ tasvir modeli, shu jumladan Midjourney\n"
+            f"💬 Suhbat tarixini eslab qoladi\n"
+            f"🎞 Videolarni boshqa tillarga tarjima\n"
+            f"🎵 Musiqa yaratish\n"
+            f"🗣 Ovozli kiritish\n"
+            f"👥 Guruhlarda ishlaydi\n"
+            f"🌐 O'rnatilgan avtomatik tarjimon\n"
+            f"🆘 24/7 operativ yordam\n\n"
+            f"🎁 <b>{remaining} ta bepul sinov so'rov</b> berildi!\n\n"
             f"💰 <b>Tariflar:</b>\n"
             f"⭐ Oddiy — {Config.SUBSCRIPTION_PRICE_UZS:,} so'm/oy ({Config.DAILY_LIMIT_NORMAL} ta/kun)\n"
             f"👑 VIP — {Config.VIP_PRICE_UZS:,} so'm/oy ({Config.DAILY_LIMIT_VIP} ta/kun)\n\n"
-            f"🎁 Do'st taklif qiling — har biri uchun <b>{Config.REFERRAL_BONUS_UZS:,} so'm</b>!\n"
+            f"🤝 Do'st taklif qiling — har biri uchun <b>{Config.REFERRAL_BONUS_UZS:,} so'm</b>!\n"
             f"🔗 <code>https://t.me/{bot_username}?start={user.id}</code>",
             parse_mode=ParseMode.HTML,
             reply_markup=main_keyboard(user.id)
@@ -269,9 +286,26 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🔒 Bu funksiya faqat obunachilarga mavjud!", reply_markup=sub_keyboard())
             return
     await update.message.reply_text(
-        "📖 <b>Men nima qila olaman?</b>\n\n"
-        "💻 Python, JS, Java, C++, HTML, CSS, SQL...\n"
-        "🛠 Kod yozish, bug tuzatish, algoritmlar\n\n"
+        "📖 <b>Texno Ai — imkoniyatlar</b>\n\n"
+        "📌 <b>Asosiy buyruqlar:</b>\n"
+        "/text — matn yaratish\n"
+        "/image — tasvir yaratish\n"
+        "/kling va /luma — video yaratish\n"
+        "/video — video tarjima\n"
+        "/music — musiqa yaratish\n"
+        "/audio — audio transkripsiya\n\n"
+        "✨ <b>Afzalliklar:</b>\n"
+        "📝 GPT, Claude, Gemini, Llama va boshqa o'nlab modellar\n"
+        "🖼 20+ tasvir modeli, shu jumladan Midjourney\n"
+        "💬 Suhbat tarixini eslab qoladi\n"
+        "🎞 Videolarni boshqa tillarga tarjima\n"
+        "📹 Video tayyorlash\n"
+        "🎵 Musiqa yaratish\n"
+        "🗣 Ovozli kiritish\n"
+        "👥 Guruhlarda ishlaydi\n"
+        "🆘 24/7 operativ yordam\n"
+        "🤝 Yo'naltiruvchi dastur (pul topish imkoniyati)\n"
+        "🌐 O'rnatilgan avtomatik tarjimon\n\n"
         "📌 <b>Tugmalar:</b>\n"
         "🤖 AI Savol — savol yuboring\n"
         "📊 Hisobim — balans va referral\n"
@@ -1447,6 +1481,219 @@ async def admin_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.deactivate_subscription(target_id)
     await update.message.reply_text(f"✅ <code>{target_id}</code> obunasi o'chirildi!", parse_mode=ParseMode.HTML)
 
+
+# ─── /newbot ──────────────────────────────────────────────────────────────────
+
+async def newbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Admin yangi bot qo'shadi.
+    - Token yuborgan odamning user_id va username i saqlanadi
+    - U yaratilgan botning admini bo'ladi (to'lovlar unga yo'naltiriladi)
+    - Bot ishga tushgandan keyin inline havola va yo'riqnoma yuboriladi
+    """
+    user = update.effective_user
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Faqat adminlar uchun!")
+        return
+
+    args = context.args
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "❓ <b>Foydalanish:</b>\n\n"
+            "<code>/newbot TOKEN BotNomi</code>\n\n"
+            "📌 <b>Misol:</b>\n"
+            "<code>/newbot 7812345678:AAFxxx... MyNewBot</code>\n\n"
+            "💡 Tokenni @BotFather dan olasiz.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    token = args[0].strip()
+    name  = " ".join(args[1:]).strip()
+
+    if ":" not in token or not token.split(":")[0].isdigit():
+        await update.message.reply_text(
+            "❌ <b>Token formati noto'g'ri!</b>\n\n"
+            "To'g'ri format: <code>123456789:AAFxxx...</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    existing = bot_manager.get_all_bots()
+    if any(b["token"] == token for b in existing):
+        await update.message.reply_text("⚠️ Bu token allaqachon ro'yxatda mavjud!\n\n/mybots")
+        return
+
+    checking_msg = await update.message.reply_text("⌛ Token tekshirilmoqda...")
+    try:
+        from telegram import Bot as TGBot
+        test_bot  = TGBot(token=token)
+        bot_info  = await test_bot.get_me()
+        real_name = bot_info.first_name
+        username  = bot_info.username
+    except Exception as e:
+        await checking_msg.edit_text(
+            f"❌ <b>Token noto'g'ri yoki bot topilmadi!</b>\n\n"
+            f"Xato: <code>{str(e)[:200]}</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # owner = token yuborgan odam (bu botning admini)
+    owner_uname = user.username or ""
+    bot_manager.add_bot_record(
+        token=token,
+        name=name,
+        owner_id=user.id,
+        owner_username=owner_uname
+    )
+
+    await checking_msg.edit_text(
+        f"✅ <b>Token tasdiqlandi!</b>\n\n"
+        f"🤖 Bot: <b>{real_name}</b> (@{username})\n"
+        f"🏷 Nom: <b>{name}</b>\n"
+        f"👤 Admin: @{owner_uname or user.full_name}\n\n"
+        f"⚡ Ishga tushirilmoqda...",
+        parse_mode=ParseMode.HTML
+    )
+
+    ok = await bot_manager.launch_bot(token=token, name=name)
+
+    if ok:
+        total    = len(bot_manager.get_all_bots())
+        bot_link = f"https://t.me/{username}"
+
+        # Asosiy xabar + inline havola
+        inline_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"🤖 @{username} ni sinab ko'ring", url=bot_link)
+        ]])
+
+        await checking_msg.edit_text(
+            f"🎉 <b>Bot muvaffaqiyatli ishga tushdi!</b>\n\n"
+            f"🤖 <b>{real_name}</b> (@{username})\n"
+            f"🏷 Nom: <b>{name}</b>\n"
+            f"👤 Bot admini: @{owner_uname or user.full_name}\n"
+            f"💾 Railway Volume ga saqlandi\n"
+            f"🔄 Server restart da avtomatik tiklanadi\n\n"
+            f"📊 Jami botlar: <b>{total} ta</b>\n\n"
+            f"⚠️ <b>Diqqat foydalanuvchilarga:</b>\n"
+            f"Botni sinab ko'ring va obuna uchun\n"
+            f"asosiy adminga to'lov qiling 👇",
+            parse_mode=ParseMode.HTML,
+            reply_markup=inline_kb
+        )
+
+        # Boshqa adminlarga xabar
+        for admin_id in Config.ADMIN_IDS:
+            if admin_id != user.id:
+                try:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"🆕 <b>Yangi bot qo'shildi!</b>\n\n"
+                            f"👤 Kim qo'shdi: @{owner_uname or user.full_name}\n"
+                            f"🤖 @{username} — {real_name}\n"
+                            f"🏷 Nom: {name}\n\n"
+                            f"💡 Bu botga to'lovlar @{owner_uname} ga boradi."
+                        ),
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+    else:
+        await checking_msg.edit_text(
+            f"⚠️ <b>Bot JSON ga saqlandi, lekin ishga tushmadi!</b>\n\n"
+            f"Ehtimol token boshqa serverda ishlamoqda.\n"
+            f"@{username} ni @BotFather orqali tekshiring.\n\n"
+            f"/mybots — botlar ro'yxati",
+            parse_mode=ParseMode.HTML
+        )
+
+# ─── /mybots ──────────────────────────────────────────────────────────────────
+
+async def mybots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Faqat adminlar uchun!")
+        return
+
+    bots = bot_manager.get_all_bots()
+    if not bots:
+        await update.message.reply_text(
+            "📭 Hozircha bot qo'shilmagan.\n\n"
+            "/newbot TOKEN Nom — yangi bot qo'shish"
+        )
+        return
+
+    running_count = bot_manager.get_running_count()
+    lines = [
+        f"🤖 <b>Botlar ro'yxati</b>",
+        f"{'─'*28}",
+        f"📊 Jami: <b>{len(bots)} ta</b> | ▶️ Ishlamoqda: <b>{running_count} ta</b>",
+        f"{'─'*28}\n"
+    ]
+    for i, b in enumerate(bots, 1):
+        is_run = bot_manager.is_running(b["token"])
+        status = "▶️ Ishlamoqda" if is_run else "⏹ To'xtatilgan"
+        tok_short = b["token"][:20] + "..."
+        bname = b["name"]
+        try:
+            dt = datetime.fromisoformat(b["created_at"]).strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            dt = b.get("created_at", "?")
+        lines.append(
+            f"{i}. <b>{bname}</b>\n"
+            f"   {status}\n"
+            f"   🔑 <code>{tok_short}</code>\n"
+            f"   📅 {dt}\n"
+        )
+    lines.append(
+        "─" * 28 + "\n"
+        "🛑 <code>/stopbot TOKEN</code> — to'xtatish\n"
+        "➕ <code>/newbot TOKEN Nom</code> — yangi qo'shish"
+    )
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+# ─── /stopbot ─────────────────────────────────────────────────────────────────
+
+async def stopbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Faqat adminlar uchun!")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "❓ <b>Foydalanish:</b>\n"
+            "<code>/stopbot TOKEN</code>\n\n/mybots — tokenlarni ko'rish",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    token = context.args[0].strip()
+    rec   = next((b for b in bot_manager.get_all_bots() if b["token"] == token), None)
+    if not rec:
+        await update.message.reply_text("❌ Bu token ro'yxatda topilmadi.\n\n/mybots")
+        return
+
+    if not bot_manager.is_running(token):
+        await update.message.reply_text(
+            f"⏹ <b>{rec['name']}</b> allaqachon to'xtatilgan.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    rname = rec["name"]
+    msg = await update.message.reply_text(f"⏳ {rname} to'xtatilmoqda...")
+    ok  = await bot_manager.stop_bot_async(token)
+    if ok:
+        await msg.edit_text(
+            f"✅ <b>{rname}</b> to'xtatildi!\n\n"
+            f"▶️ Qayta ishga tushirish:\n<code>/newbot {token} {rname}</code>",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await msg.edit_text("❌ To'xtatishda xatolik yuz berdi.")
+
 # ─── SCHEDULER ────────────────────────────────────────────────────────────────
 
 async def notify_expiring(app):
@@ -1498,6 +1745,11 @@ def main():
     app.add_handler(CommandHandler("activate",   admin_activate))
     app.add_handler(CommandHandler("deactivate", admin_deactivate))
 
+    # ── Ko'p bot tizimi
+    app.add_handler(CommandHandler("newbot",  newbot_command))
+    app.add_handler(CommandHandler("mybots",  mybots_command))
+    app.add_handler(CommandHandler("stopbot", stopbot_command))
+
     app.add_handler(CallbackQueryHandler(handle_users_panel, pattern="^(users_|user_detail_|user_refs_|uact_|udeact_|uvip_|uunvip_)"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
@@ -1508,6 +1760,27 @@ def main():
     scheduler.start()
 
     logger.info("🤖 Texno Ai boti ishga tushdi!")
+
+    # Server restart da barcha "running" botlarni tiklash
+    async def _post_init(application):
+        count = await bot_manager.restart_all_running_bots()
+        if count:
+            logger.info(f"♻️ {count} ta bot tiklandi (restart).")
+        for admin_id in Config.ADMIN_IDS:
+            try:
+                await application.bot.send_message(
+                    chat_id=admin_id,
+                    text=(
+                        "✅ <b>Texno Ai server ishga tushdi!</b>\n\n"
+                        f"♻️ Tiklangan botlar: <b>{count} ta</b>\n\n"
+                        "/mybots — botlar ro'yxati"
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    app.post_init = _post_init
     app.run_polling(drop_pending_updates=True)
 
 

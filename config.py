@@ -27,7 +27,7 @@ class Config:
     # ── Trial (sinov) — obunasiz userlarga bepul xabarlar ────────────────────
     TRIAL_LIMIT = int(os.getenv("TRIAL_LIMIT", "5"))
 
-    REFERRAL_BONUS_UZS = int(os.getenv("REFERRAL_BONUS_UZS", "200"))
+    REFERRAL_BONUS_UZS = int(os.getenv("REFERRAL_BONUS_UZS", "1000"))
 
     # ── VIP admin — faqat shu admin VIP to'lovlarini ko'radi va tasdiqlaydi ──
     VIP_ADMIN_USERNAME = os.getenv("VIP_ADMIN_USERNAME", "Teacher_texnoo")
